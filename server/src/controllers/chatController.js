@@ -1,13 +1,12 @@
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Chat = require('../models/Chat');
 const Conversation = require('../models/Conversation');
 const Memory = require('../models/Memory');
 
 
-// Initialize OpenAI
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
+// Initialize Google Generative AI
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // @desc    Send a message and get AI response
 // @route   POST /api/chat
@@ -49,18 +48,17 @@ const sendMessage = async (req, res) => {
         // 2. Intent Classification
         let intent = 'CHAT';
         try {
-            const classification = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    {
-                        role: "system",
-                        content: "Classify user intent: [CHAT, MEMORY_STORE, FORGET_MEMORY, NAVIGATION]. Return ONLY the word.\n\nExamples:\n- 'Remember I am a developer' -> MEMORY_STORE\n- 'Forget that I like coffee' -> FORGET_MEMORY\n- 'Go to settings' -> NAVIGATION\n- 'How are you?' -> CHAT"
-                    },
-                    { role: "user", content: message }
-                ],
-                max_tokens: 10,
-            });
-            intent = classification.choices[0].message.content.trim().toUpperCase();
+            const classificationPrompt = `Classify user intent: [CHAT, MEMORY_STORE, FORGET_MEMORY, NAVIGATION]. Return ONLY the word.
+Examples:
+- 'Remember I am a developer' -> MEMORY_STORE
+- 'Forget that I like coffee' -> FORGET_MEMORY
+- 'Go to settings' -> NAVIGATION
+- 'How are you?' -> CHAT
+User message: "${message}"`;
+
+            const result = await model.generateContent(classificationPrompt);
+            const response = await result.response;
+            intent = response.text().trim().toUpperCase();
         } catch (e) {
             console.error("Classifier failed, defaulting to CHAT:", e);
         }
@@ -70,15 +68,13 @@ const sendMessage = async (req, res) => {
 
         // 3. Handle intents
         if (intent === 'MEMORY_STORE') {
-            const memTypeGen = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    { role: "system", content: "Categorize memory: [fact, preference, profile, work]. Return ONLY the word." },
-                    { role: "user", content: message }
-                ],
-                max_tokens: 10,
-            });
-            const memoryType = memTypeGen.choices[0].message.content.trim().toLowerCase();
+            const memTypePrompt = `Categorize memory: [fact, preference, profile, work]. Return ONLY the word.
+User message: "${message}"`;
+
+            const result = await model.generateContent(memTypePrompt);
+            const response = await result.response;
+            const memoryType = response.text().trim().toLowerCase();
+
             await Memory.create({
                 user: req.user._id,
                 content: message,
@@ -98,7 +94,10 @@ const sendMessage = async (req, res) => {
             const memoryContext = memories.map(m => `[${m.memoryType.toUpperCase()}]: ${m.content}`).join("\n");
 
             const history = await Chat.find({ conversation: conversation._id }).sort({ createdAt: -1 }).limit(10);
-            const messagesForAI = history.reverse().map(msg => ({ role: msg.role, content: msg.content }));
+            // Adapt history for Gemini (user/model roles)
+            const historyContext = history.reverse().map(msg =>
+                `${msg.role === 'user' ? 'User' : 'Model'}: ${msg.content}`
+            ).join("\n");
 
             const systemPrompt = `You are EDITH (Electronic Digital Interactive Terminal Assistant), an advanced AI construct.
 Persona: Professional, highly intelligent, slightly futuristic yet warm and loyal.
@@ -112,16 +111,16 @@ Guidelines:
 2. Be concise but insightful.
 3. If the user asks for context from 'yesterday' or 'past', rely on the provided memories and history.
 4. Current Time: ${new Date().toUTCString()}.
-5. If an API failure occurs, inform the user you're having trouble reaching your core modules.`;
+5. If an API failure occurs, inform the user you're having trouble reaching your core modules.
 
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    ...messagesForAI
-                ],
-            });
-            aiResponseContent = completion.choices[0].message.content;
+Conversation History:
+${historyContext}
+User: ${message}
+Model:`;
+
+            const result = await model.generateContent(systemPrompt);
+            const response = await result.response;
+            aiResponseContent = response.text();
         }
 
         const aiMessage = await Chat.create({
@@ -133,14 +132,15 @@ Guidelines:
 
         conversation.lastMessage = aiResponseContent;
         if (isNewConversation && !conversation.titleModified) {
-            const titleGen = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: [
-                    { role: "system", content: "Create a short, futuristic title (3-5 words) for this chat. No quotes." },
-                    { role: "user", content: message }
-                ],
-            });
-            conversation.title = titleGen.choices[0].message.content.replace(/["']/g, '').trim();
+            const titlePrompt = `Create a short, futuristic title (3-5 words) for this chat. No quotes.
+Message: "${message}"`;
+            try {
+                const result = await model.generateContent(titlePrompt);
+                const response = await result.response;
+                conversation.title = response.text().replace(/["']/g, '').trim();
+            } catch (e) {
+                console.error("Title generation failed", e);
+            }
         }
         await conversation.save();
 
@@ -153,10 +153,11 @@ Guidelines:
         });
 
     } catch (error) {
-        console.error("AI Core Error:", error);
+        console.error("FULL GEMINI ERROR:", error);
         res.status(500).json({
             message: "I've encountered a critical failure in my linguistic processing module.",
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };

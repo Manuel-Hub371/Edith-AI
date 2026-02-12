@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const mongoose = require('mongoose');
-const { OpenAI } = require('openai');
 
 // @desc    Get system diagnostic status
 // @route   GET /api/user/status
@@ -10,7 +9,7 @@ const { OpenAI } = require('openai');
 router.get('/status', protect, async (req, res) => {
     try {
         const dbStatus = mongoose.connection.readyState === 1 ? 'OPTIMIZED' : 'DISCONNECTED';
-        const aiStatus = process.env.OPENAI_API_KEY ? 'READY' : 'KEY_MISSING';
+        const aiStatus = process.env.GOOGLE_API_KEY ? 'READY' : 'KEY_MISSING';
 
         res.json({
             aiCore: aiStatus,
