@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+google-generativeai
+pydantic
+pydantic-settings
+python-dotenv
+aiofiles
+tenacity

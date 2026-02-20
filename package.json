@@ -1,0 +1,16 @@
+{
+  "name": "ai-chatbot",
+  "version": "1.0.0",
+  "description": "Minimal AI Chatbot",
+  "scripts": {
+    "dev": "uvicorn app.main:app --reload",
+    "start": "uvicorn app.main:app"
+  },
+  "keywords": [
+    "ai",
+    "chatbot",
+    "fastapi"
+  ],
+  "author": "",
+  "license": "ISC"
+}
